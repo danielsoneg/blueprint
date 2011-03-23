@@ -114,7 +114,10 @@ class Cookbook(object):
             except OSError as e:
                 if errno.EEXIST != e.errno:
                     raise e
-            f = codecs.open(pathname, 'w', 'utf-8')
+            if pathname.endswith('.tar'):
+                f = open(pathname, 'w')
+            else:
+                f = codecs.open(pathname, 'w', 'utf-8')
             f.write(resource.content)
             f.close()
         if gzip:
