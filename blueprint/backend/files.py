@@ -116,7 +116,7 @@ def files(b):
     for dirpath, dirnames, filenames in os.walk('/etc'):
 
         # Determine if this entire directory should be ignored by default.
-        ignored = _ignore(os.path.basename(dirpath), dirpath)
+        ignored = _ignore(os.path.basename(dirpath))
 
         # Track the ctime of each file in this directory.  Weed out false
         # positives by ignoring files with common ctimes.
@@ -133,7 +133,7 @@ def files(b):
         for dirname in dirnames:
             ctimes[os.lstat(os.path.join(dirpath, dirname)).st_ctime] += 1
 
-        for pathname, s in files:
+        for filename, s in files:
 
             # Ignore files that match in the `gitignore`(5)-style
             # `~/.blueprintignore` file.  Default to ignoring files that
@@ -141,34 +141,33 @@ def files(b):
             # is a very strong indication that the file is original to
             # the system and should be ignored.
             if _ignore(filename,
-                       pathname,
                        ignored=ignored or 1 < ctimes[s.st_ctime]):
                 continue
 
             # The content is used even for symbolic links to determine whether
             # it has changed from the packaged version.
             try:
-                content = open(pathname).read()
+                content = open(filename).read()
             except IOError:
                 #logging.warning('{0} not readable'.format(pathname))
                 continue
 
-            if _is_known_file(filename, pathname, content):
+            if _is_known_file(filename, content):
                 continue
 
             # Don't store DevStructure's default `/etc/fuse.conf`.  (This is
             # a legacy condition.)
-            if '/etc/fuse.conf' == pathname:
+            if '/etc/fuse.conf' == filename:
                 try:
-                    if 'user_allow_other\n' == open(pathname).read():
-                        if _ignore(filename, pathname, ignored=True):
+                    if 'user_allow_other\n' == open(filename).read():
+                        if _ignore(filename, ignored=True):
                             continue
                 except IOError:
                     pass
 
             # A symbolic link's content is the link target.
             if stat.S_ISLNK(s.st_mode):
-                content = os.readlink(pathname)
+                content = os.readlink(filename)
 
                 # Ignore symbolic links providing backwards compatibility
                 # between SystemV init and Upstart.
@@ -196,19 +195,19 @@ def files(b):
             # a blueprint and really shouldn't appear in `/etc` at all.
             else:
                 logging.warning('{0} is not a regular file or symbolic link'
-                                ''.format(pathname))
+                                ''.format(filename))
                 continue
 
             pw = pwd.getpwuid(s.st_uid)
             gr = grp.getgrgid(s.st_gid)
-            b.files[pathname] = dict(content=content,
+            b.files[filename] = dict(content=content,
                                      encoding=encoding,
                                      group=gr.gr_name,
                                      mode='{0:o}'.format(s.st_mode),
                                      owner=pw.pw_name)
 
 
-def _ignore(filename, pathname, ignored=False):
+def _ignore(filename, ignored=False):
     """
     Return `True` if the `gitignore`(5)-style `~/.blueprintignore` file says
     the given file should be ignored.  The starting state of the file may be
@@ -235,15 +234,15 @@ def _ignore(filename, pathname, ignored=False):
 
     # Determine if the `pathname` matches the `pattern`.  `filename` is
     # given as a convenience.  See `gitignore`(5) for the rules in play.
-    def match(filename, pathname, pattern):
+    def match(filename, pattern):
         dir_only = '/' == pattern[-1]
         pattern = pattern.rstrip('/')
         if -1 == pattern.find('/'):
             if fnmatch.fnmatch(filename, pattern):
-                return os.path.isdir(pathname) if dir_only else True
+                return os.path.isdir(filename) if dir_only else True
         else:
             for p in glob.glob(os.path.join('/etc', pattern)):
-                if pathname == p or pathname.startswith('{0}/'.format(p)):
+                if filename == p or filename.startswith('{0}/'.format(p)):
                     return True
         return False
 
@@ -255,21 +254,21 @@ def _ignore(filename, pathname, ignored=False):
         if ignored != negate:
             continue
         if ignored:
-            if match(filename, pathname, pattern):
+            if match(filename, pattern):
                 return False
         else:
-            ignored = match(filename, pathname, pattern)
+            ignored = match(filename, pattern)
 
     return ignored
 
 
-def _is_known_file(filename, pathname, content):
+def _is_known_file(filename, content):
     """
     Checks if given filename is known to the system.
     Returns True if the file and the content is known, otherweise False
 
     """
-    packages = _dpkg_query_S(pathname)
+    packages = _dpkg_query_S(filename)
     # Ignore files that are from the `base-files` package (which
     # doesn't include MD5 sums for every file for some reason),
     # unchanged from their packaged version, or match in `MD5SUMS`.
@@ -277,17 +276,17 @@ def _is_known_file(filename, pathname, content):
         if 'base-files' == package:
             return True
 
-    for md5sum in _get_md5sums(pathname):
+    for md5sum in _get_md5sums(filename):
         if hashlib.md5(content).hexdigest() == md5sum:
-            if _ignore(filename, pathname, ignored=True):
+            if _ignore(filename, ignored=True):
                 return True
 
     return False
 
 
-def _dpkg_query_S(pathname):
+def _dpkg_query_S(filename):
     """
-    Return the name of the packages that contains `pathname` or `None`.
+    Return the name of the packages that contains `filename` or `None`.
     Due to divert (dpkg-divert(8)) this returns either a list of packages
     for a specific file or a empty tumple if no package can be determined.
     """
@@ -308,29 +307,29 @@ def _dpkg_query_S(pathname):
         cache = _dpkg_query_S._cache
 
     try:
-        return cache[pathname]
+        return cache[filename]
     except KeyError:
         try:
-            return _dpkg_query_S(os.readlink(pathname))
+            return _dpkg_query_S(os.readlink(filename))
         except OSError:
             return ()
 
 
-def _get_md5sums(pathname):
+def _get_md5sums(filename):
     """
     Returns a set of available MD5 sums for a given file.
     Due to dpkg-divert(8) one file may have multiple MD5 sums.
     """
 
     md5sums = []
-    packages = _dpkg_query_S(pathname)
+    packages = _dpkg_query_S(filename)
     if packages:
-        md5sums += _dpkg_status_md5sum(pathname)
+        md5sums += _dpkg_status_md5sum(filename)
         for package in packages:
-            md5sums.append(_dpkg_md5sum(package, pathname))
+            md5sums.append(_dpkg_md5sum(package, filename))
 
-    if pathname in MD5SUMS:
-        md5sum = MD5SUMS[pathname]
+    if filename in MD5SUMS:
+        md5sum = MD5SUMS[filename]
         try:
             if '/' == md5sum[0]:  # md5sum seems to be a file -> read file
                 md5sum = hashlib.md5(open(md5sum).read()).hexdigest()
@@ -342,11 +341,11 @@ def _get_md5sums(pathname):
     return set(md5sums)
 
 
-def _dpkg_status_md5sum(pathname):
+def _dpkg_status_md5sum(filename):
     """
     Return the MD5 sum from /var/lib/dpkg/status. The hashes are cached.
-    Returns a list of MD5 sums for the specified `pathname` or a empty
-    tuple if `pathname` was not found in /var/lib/dpkg/status
+    Returns a list of MD5 sums for the specified `filename` or a empty
+    tuple if `filename` was not found in /var/lib/dpkg/status
     This function does _not_ call dpkg -S but mimics its behaviour.
 
     """
@@ -368,19 +367,19 @@ def _dpkg_status_md5sum(pathname):
     else:
         _cache = _dpkg_status_md5sum._cache
     try:
-        return _cache[pathname]
+        return _cache[filename]
     except KeyError:
         return ()
 
 
-def _dpkg_md5sum(package, pathname):
+def _dpkg_md5sum(package, filename):
     """
-    Find the MD5 sum of the packaged version of pathname or `None` if the
-    `pathname` was not found in the specified Debian package.
+    Find the MD5 sum of the packaged version of filename or `None` if the
+    `filename` was not found in the specified Debian package.
     """
     try:
         for line in open('/var/lib/dpkg/info/{0}.md5sums'.format(package)):
-            if line.endswith('{0}\n'.format(pathname[1:])):
+            if line.endswith('{0}\n'.format(filename[1:])):
                 return line[0:32]
     except IOError:
         pass
